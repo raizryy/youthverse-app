@@ -41,12 +41,14 @@ jobs:
       - name: Install Android SDK packages
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager --install \
+          set +o pipefail
+          yes 2>/dev/null | sdkmanager --licenses >/dev/null
+          yes 2>/dev/null | sdkmanager --install \
             "platform-tools" \
             "platforms;android-36" \
             "platforms;android-36.1" \
             "build-tools;36.0.0"
+          set -o pipefail
           sdkmanager --list_installed | grep -E 'platforms;android-36(\.1)?|build-tools;36\.0\.0|platform-tools'
 
       - name: Set up Gradle 9.3.1
@@ -81,15 +83,17 @@ jobs:
       - name: Create temporary Android debug signing key
         run: |
           set -euo pipefail
-          keytool -genkeypair -v \
-            -keystore debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
       - name: Verify Phase 4 security checks
         run: node scripts/verify-phase4.mjs
