@@ -272,9 +272,7 @@ fun attemptAutoSignIn(
         return
     }
 
-    val clientId = runCatching { context.getString(R.string.default_web_client_id) }
-        .getOrNull()
-        ?.takeIf { it.isNotBlank() }
+    val clientId = resolveDefaultWebClientId(context)
 
     if (clientId == null) {
         onUnauthenticated()
@@ -329,9 +327,7 @@ fun onGoogleSignInClicked(
         return
     }
 
-    val clientId = runCatching { context.getString(R.string.default_web_client_id) }
-        .getOrNull()
-        ?.takeIf { it.isNotBlank() }
+    val clientId = resolveDefaultWebClientId(context)
 
     if (clientId == null) {
         onAuthError("Google Sign-In is not configured. Check the Firebase Android app and web client ID.")
@@ -407,4 +403,16 @@ fun signOut(
             }
         }
     }
+}
+
+private fun resolveDefaultWebClientId(context: Context): String? {
+    val resId = context.resources.getIdentifier(
+        "default_web_client_id",
+        "string",
+        context.packageName
+    )
+    if (resId == 0) return null
+    return runCatching { context.getString(resId) }
+        .getOrNull()
+        ?.takeIf { it.isNotBlank() }
 }
