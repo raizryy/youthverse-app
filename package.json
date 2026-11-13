@@ -1,0 +1,25 @@
+{
+  "name": "youthverse-firebase-security-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:rules": "firebase emulators:exec --project demo-no-project --only firestore \"node --test firestore.test.js\"",
+    "deploy:rules": "firebase deploy --project youthverse-yadanarlynn --only firestore:rules",
+    "verify:android-package": "node scripts/verify-android-package.mjs",
+    "test:functions": "npm --prefix functions test",
+    "deploy:functions": "firebase deploy --project youthverse-yadanarlynn --only functions",
+    "verify:phase4": "node scripts/verify-phase4.mjs",
+    "verify:phase5": "node scripts/verify-phase5.mjs",
+    "verify:phase6": "node scripts/verify-phase6.mjs",
+    "verify:phase7": "node scripts/verify-phase7.mjs",
+    "test:emulator-suite": "firebase emulators:exec --project demo-no-project --only firestore,auth \"export FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099; export FIRESTORE_EMULATOR_HOST=127.0.0.1:8085; node --test firestore.test.js && node scripts/seed-emulator-admin.mjs && ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.10.0",
+    "firebase-tools": "^14.12.0"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.5.0"
+  }
+}

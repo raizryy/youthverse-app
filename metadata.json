@@ -1,0 +1,6 @@
+{
+  "name": "YouthVerse",
+  "description": "Digital reading platform for novels, manga, manhwa, and manhua with Myanmar and English support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

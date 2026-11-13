@@ -1,0 +1,36 @@
+<resources>
+    <string name="app_name">YouthVerse</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_explore">Explore</string>
+    <string name="nav_library">Library</string>
+    <string name="nav_profile">Profile</string>
+
+    <string name="sign_in_title">Welcome to YouthVerse</string>
+    <string name="sign_in_subtitle">Explore thousands of novels, manga, manhwa, and manhua in Myanmar and English.</string>
+    <string name="sign_in_google">Sign in with Google</string>
+
+    <string name="empty_home_title">The Verse is Awaiting Stories</string>
+    <string name="empty_home_subtitle">No published stories yet. Authorized administrators can publish new novels and comics.</string>
+    <string name="empty_library_title">Your Library is Empty</string>
+    <string name="empty_library_subtitle">Explore stories and add them to your reading list to track your progress.</string>
+
+    <string name="btn_start_reading">Start Reading</string>
+    <string name="btn_continue_reading">Continue Reading</string>
+    <string name="btn_add_to_library">Add to Library</string>
+    <string name="btn_in_library">In Library</string>
+
+    <string name="tab_all">All</string>
+    <string name="tab_reading">Reading</string>
+    <string name="tab_completed">Completed</string>
+    <string name="tab_want_to_read">Want to Read</string>
+    <string name="tab_favorites">Favorites</string>
+
+    <string name="reader_font_size">Font Size</string>
+    <string name="reader_font_family">Font Family</string>
+    <string name="reader_theme">Reader Theme</string>
+
+    <string name="admin_portal">Admin Portal</string>
+    <string name="admin_dashboard">Admin CMS Dashboard</string>
+    <string name="admin_create_content">Publish New Title</string>
+    <string name="admin_create_chapter">Add Chapter</string>
+</resources>

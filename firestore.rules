@@ -1,0 +1,259 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Admin authority is granted only by Firebase Admin SDK custom claims.
+    // Email addresses and client-editable Firestore profile fields are NOT authorization.
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.get('admin', false) == true;
+    }
+
+    function canReadPublishedContent(contentId) {
+      let content = get(/databases/$(database)/documents/content/$(contentId)).data;
+      return content.published == true && content.visibility == true;
+    }
+
+    // Entity validation helpers
+    function isValidUserProfile(data) {
+      return data.uid is string && data.uid.size() <= 128 &&
+             data.email is string && data.email.size() <= 200 &&
+             data.role == 'USER' &&
+             (!('displayName' in data) || data.displayName == null || (data.displayName is string && data.displayName.size() <= 100)) &&
+             (!('photoUrl' in data) || data.photoUrl == null || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
+             (!('preferredLanguage' in data) || data.preferredLanguage == null || data.preferredLanguage in ['my', 'en']) &&
+             (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidContentItem(data) {
+      return data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+             data.author is string && data.author.size() > 0 && data.author.size() <= 150 &&
+             data.contentType in ['NOVEL', 'MANGA', 'MANHUA', 'MANHWA', 'LIGHT_NOVEL'] &&
+             data.published is bool &&
+             (!('alternativeTitle' in data) || data.alternativeTitle == null || (data.alternativeTitle is string && data.alternativeTitle.size() <= 200)) &&
+             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 5000)) &&
+             (!('translator' in data) || data.translator == null || (data.translator is string && data.translator.size() <= 150)) &&
+             (!('coverUrl' in data) || data.coverUrl == null || (data.coverUrl is string && data.coverUrl.size() <= 500)) &&
+             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 500)) &&
+             (!('genres' in data) || data.genres == null || (data.genres is list && data.genres.size() <= 20)) &&
+             (!('language' in data) || data.language == null || (data.language is string && data.language.size() <= 20)) &&
+             (!('status' in data) || data.status == null || data.status in ['ONGOING', 'COMPLETED']) &&
+             (!('visibility' in data) || data.visibility == null || data.visibility is bool) &&
+             (!('ratingAverage' in data) || data.ratingAverage == null || (data.ratingAverage is number && data.ratingAverage >= 0 && data.ratingAverage <= 5)) &&
+             (!('ratingCount' in data) || data.ratingCount == null || (data.ratingCount is number && data.ratingCount >= 0)) &&
+             (!('publishedChapterCount' in data) || data.publishedChapterCount == null || (data.publishedChapterCount is number && data.publishedChapterCount >= 0)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidChapterItem(data) {
+      return data.contentId is string && data.contentId.size() <= 128 &&
+             data.chapterNumber is number && data.chapterNumber >= 0 &&
+             data.title is string && data.title.size() <= 200 &&
+             data.contentType in ['TEXT', 'IMAGE'] &&
+             data.published is bool &&
+             (!('textContent' in data) || data.textContent == null || (data.textContent is string && data.textContent.size() <= 200000)) &&
+             (!('imageUrls' in data) || data.imageUrls == null || (data.imageUrls is list && data.imageUrls.size() <= 300)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidLibraryEntry(data) {
+      return data.contentId is string && data.contentId.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.status in ['READING', 'COMPLETED', 'WANT_TO_READ', 'ON_HOLD'] &&
+             (!('isFavorite' in data) || data.isFavorite == null || data.isFavorite is bool) &&
+             (!('isBookmarked' in data) || data.isBookmarked == null || data.isBookmarked is bool) &&
+             (!('lastReadChapterId' in data) || data.lastReadChapterId == null || (data.lastReadChapterId is string && data.lastReadChapterId.size() <= 128)) &&
+             (!('lastReadChapterNumber' in data) || data.lastReadChapterNumber == null || (data.lastReadChapterNumber is number && data.lastReadChapterNumber >= 0)) &&
+             (!('progressPercentage' in data) || data.progressPercentage == null || (data.progressPercentage is number && data.progressPercentage >= 0 && data.progressPercentage <= 100)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidHistoryEntry(data) {
+      return data.contentId is string && data.contentId.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.chapterId is string && data.chapterId.size() <= 128 &&
+             (!('chapterNumber' in data) || data.chapterNumber == null || (data.chapterNumber is number && data.chapterNumber >= 0)) &&
+             (!('chapterTitle' in data) || data.chapterTitle == null || (data.chapterTitle is string && data.chapterTitle.size() <= 200)) &&
+             (!('progressPercentage' in data) || data.progressPercentage == null || (data.progressPercentage is number && data.progressPercentage >= 0 && data.progressPercentage <= 100)) &&
+             (!('scrollPosition' in data) || data.scrollPosition == null || (data.scrollPosition is number && data.scrollPosition >= 0)) &&
+             (!('pageIndex' in data) || data.pageIndex == null || (data.pageIndex is number && data.pageIndex >= 0)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidComment(data) {
+      return data.contentId is string && data.contentId.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.userName is string && data.userName.size() <= 100 &&
+             data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
+             (!('chapterId' in data) || data.chapterId == null || (data.chapterId is string && data.chapterId.size() <= 128)) &&
+             (!('userPhotoUrl' in data) || data.userPhotoUrl == null || (data.userPhotoUrl is string && data.userPhotoUrl.size() <= 500)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidReview(data) {
+      return data.contentId is string && data.contentId.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.userName is string && data.userName.size() <= 100 &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             (!('reviewText' in data) || data.reviewText == null || (data.reviewText is string && data.reviewText.size() <= 2000)) &&
+             (!('userPhotoUrl' in data) || data.userPhotoUrl == null || (data.userPhotoUrl is string && data.userPhotoUrl.size() <= 500)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    // Admins Collection
+    match /admins/{adminId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       incoming().uid == request.auth.uid &&
+                       incoming().role == 'USER' &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       isValidUserProfile(incoming());
+      allow update: if isSignedIn() && (
+        (request.auth.uid == userId &&
+         incoming().uid == existing().uid &&
+         incoming().role == existing().role &&
+         incoming().createdAt == existing().createdAt &&
+         isValidUserProfile(incoming())) ||
+        isAdmin()
+      );
+      // Account deletion must go through a trusted cleanup workflow; direct deletion
+      // would leave nested library/history documents orphaned.
+      allow delete: if false;
+
+      // User Library Subcollection
+      match /library/{contentId} {
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         incoming().userId == request.auth.uid &&
+                         incoming().createdAt is timestamp &&
+                         incoming().createdAt <= request.time &&
+                         isValidLibraryEntry(incoming());
+        allow update: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidLibraryEntry(incoming());
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+
+      // User History Subcollection
+      match /history/{contentId} {
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         incoming().userId == request.auth.uid &&
+                         incoming().createdAt is timestamp &&
+                         incoming().createdAt <= request.time &&
+                         isValidHistoryEntry(incoming());
+        allow update: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidHistoryEntry(incoming());
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+
+    // Content Collection (Novels, Manga, etc.)
+    match /content/{contentId} {
+      allow get: if (isAdmin()) ||
+                    (resource.data.published == true && resource.data.visibility == true);
+      allow list: if isAdmin() ||
+                     (resource.data.published == true && resource.data.visibility == true);
+      allow create: if isAdmin() &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       isValidContentItem(incoming());
+      allow update: if isAdmin() &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidContentItem(incoming());
+      // Content deletion is performed by the trusted deleteContentCascade callable.
+      // Admin SDK bypasses rules; blocking client deletes prevents orphaned subcollections.
+      allow delete: if false;
+
+      // Chapters Subcollection
+      match /chapters/{chapterId} {
+        allow get: if isAdmin() ||
+                      (resource.data.published == true && canReadPublishedContent(contentId));
+        allow list: if isAdmin() ||
+                       (resource.data.published == true && canReadPublishedContent(contentId));
+        allow create: if isAdmin() &&
+                         incoming().createdAt is timestamp &&
+                         incoming().createdAt <= request.time &&
+                         isValidChapterItem(incoming());
+        allow update: if isAdmin() &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidChapterItem(incoming());
+        allow delete: if isAdmin();
+      }
+    }
+
+    // Comments Collection
+    match /comments/{commentId} {
+      allow get, list: if isAdmin() || (isSignedIn() && canReadPublishedContent(resource.data.contentId));
+      allow create: if isSignedIn() &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       canReadPublishedContent(incoming().contentId) &&
+                       isValidComment(incoming());
+      allow update: if isSignedIn() &&
+                       incoming().userId == existing().userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().contentId == existing().contentId &&
+                       incoming().createdAt == existing().createdAt &&
+                       canReadPublishedContent(existing().contentId) &&
+                       isValidComment(incoming());
+      allow delete: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // Reviews Collection
+    match /reviews/{reviewId} {
+      allow get, list: if isAdmin() || (isSignedIn() && canReadPublishedContent(resource.data.contentId));
+      allow create: if isSignedIn() &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       canReadPublishedContent(incoming().contentId) &&
+                       isValidReview(incoming());
+      allow update: if isSignedIn() &&
+                       incoming().userId == existing().userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().contentId == existing().contentId &&
+                       incoming().createdAt == existing().createdAt &&
+                       canReadPublishedContent(existing().contentId) &&
+                       isValidReview(incoming());
+      allow delete: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+    }
+  }
+}

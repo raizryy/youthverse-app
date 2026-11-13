@@ -1,0 +1,175 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with display name, preferences, and role",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "photoUrl": { "type": "string" },
+        "role": { "type": "string", "enum": ["USER"] },
+        "preferredLanguage": { "type": "string", "enum": ["my", "en"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "ContentItem": {
+      "title": "ContentItem",
+      "description": "Novel or comic book content details",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "alternativeTitle": { "type": "string" },
+        "description": { "type": "string" },
+        "author": { "type": "string" },
+        "translator": { "type": "string" },
+        "coverUrl": { "type": "string" },
+        "thumbnailUrl": { "type": "string" },
+        "contentType": { "type": "string", "enum": ["NOVEL", "MANGA", "MANHUA", "MANHWA", "LIGHT_NOVEL"] },
+        "genres": { "type": "array" },
+        "language": { "type": "string" },
+        "status": { "type": "string", "enum": ["ONGOING", "COMPLETED"] },
+        "visibility": { "type": "boolean" },
+        "published": { "type": "boolean" },
+        "ratingAverage": { "type": "number" },
+        "ratingCount": { "type": "number" },
+        "publishedChapterCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "author", "contentType", "published", "createdAt"]
+    },
+    "ChapterItem": {
+      "title": "ChapterItem",
+      "description": "Individual chapter of a novel or comic",
+      "type": "object",
+      "properties": {
+        "contentId": { "type": "string" },
+        "chapterNumber": { "type": "number" },
+        "title": { "type": "string" },
+        "contentType": { "type": "string", "enum": ["TEXT", "IMAGE"] },
+        "textContent": { "type": "string" },
+        "imageUrls": { "type": "array" },
+        "published": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["contentId", "chapterNumber", "title", "contentType", "published", "createdAt"]
+    },
+    "LibraryEntry": {
+      "title": "LibraryEntry",
+      "description": "User reading status and library bookmark",
+      "type": "object",
+      "properties": {
+        "contentId": { "type": "string" },
+        "userId": { "type": "string" },
+        "status": { "type": "string", "enum": ["READING", "COMPLETED", "WANT_TO_READ", "ON_HOLD"] },
+        "isFavorite": { "type": "boolean" },
+        "isBookmarked": { "type": "boolean" },
+        "lastReadChapterId": { "type": "string" },
+        "lastReadChapterNumber": { "type": "number" },
+        "progressPercentage": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["contentId", "userId", "status", "createdAt"]
+    },
+    "HistoryEntry": {
+      "title": "HistoryEntry",
+      "description": "Reading progress tracking and resume history",
+      "type": "object",
+      "properties": {
+        "contentId": { "type": "string" },
+        "userId": { "type": "string" },
+        "chapterId": { "type": "string" },
+        "chapterNumber": { "type": "number" },
+        "chapterTitle": { "type": "string" },
+        "progressPercentage": { "type": "number" },
+        "scrollPosition": { "type": "number" },
+        "pageIndex": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["contentId", "userId", "chapterId", "createdAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "User discussion comments on books or chapters",
+      "type": "object",
+      "properties": {
+        "contentId": { "type": "string" },
+        "chapterId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhotoUrl": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["contentId", "userId", "userName", "text", "createdAt"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "User ratings and text reviews for content",
+      "type": "object",
+      "properties": {
+        "contentId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhotoUrl": { "type": "string" },
+        "rating": { "type": "number" },
+        "reviewText": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["contentId", "userId", "userName", "rating", "createdAt"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Administrator registration document",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "addedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "addedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profiles"
+    },
+    "/users/{userId}/library/{contentId}": {
+      "schema": "LibraryEntry",
+      "description": "User personal reading library"
+    },
+    "/users/{userId}/history/{contentId}": {
+      "schema": "HistoryEntry",
+      "description": "Reading history and progress"
+    },
+    "/content/{contentId}": {
+      "schema": "ContentItem",
+      "description": "Published and draft novels/comics"
+    },
+    "/content/{contentId}/chapters/{chapterId}": {
+      "schema": "ChapterItem",
+      "description": "Chapters for novels/comics"
+    },
+    "/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Community comments"
+    },
+    "/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "User reviews and ratings"
+    },
+    "/admins/{adminId}": {
+      "schema": "Admin",
+      "description": "Admin access list"
+    }
+  }
+}

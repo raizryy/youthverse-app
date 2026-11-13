@@ -1,0 +1,15 @@
+{
+  "name": "youthverse-functions",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "firebase-functions": "^6.4.0",
+    "firebase-admin": "^13.5.0"
+  }
+}
