@@ -17,6 +17,7 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,6 +44,7 @@ class AuthViewModel(
     private val authOperationMutex = Mutex()
     private var lastSyncedUid: String? = null
     private var autoSignInAttempted = false
+    private var autoSignInJob: Job? = null
 
     init {
         observeAuthenticationState()
@@ -58,6 +60,7 @@ class AuthViewModel(
                 if (user == null) {
                     lastSyncedUid = null
                     if (_authState.value !is AuthState.Error) {
+                        Log.d(TAG, "stage=AUTH_STATE_TRANSITION state=SignedOut")
                         _authState.value = AuthState.SignedOut
                     }
                     return@collect
@@ -86,10 +89,11 @@ class AuthViewModel(
                     syncResult.fold(
                         onSuccess = { (syncedUser, profile) ->
                             lastSyncedUid = syncedUser.uid
+                            Log.d(TAG, "stage=AUTH_STATE_TRANSITION state=SignedIn source=SESSION_RESTORE role=${profile.role}")
                             _authState.value = AuthState.SignedIn(syncedUser, profile)
                         },
                         onFailure = { error ->
-                            Log.w(TAG, "Profile sync warning during session restore: ${error.message}")
+                            Log.w(TAG, "stage=AUTH_STATE_TRANSITION state=SignedIn_WITHOUT_PROFILE source=SESSION_RESTORE errorType=${error::class.simpleName}")
                             lastSyncedUid = activeUser.uid
                             _authState.value = AuthState.SignedIn(activeUser, null)
                         }
@@ -122,22 +126,29 @@ class AuthViewModel(
         if (_authState.value is AuthState.SigningIn || _authState.value is AuthState.SigningUp) return
         autoSignInAttempted = true
 
-        viewModelScope.launch {
+        autoSignInJob = viewModelScope.launch {
             if (authOperationMutex.isLocked || authRepository.currentUser != null) return@launch
+            Log.d(TAG, "stage=SILENT_GOOGLE_SIGN_IN status=START")
             val token = trySilentGoogleIdToken(activity, credentialManager)
             if (token != null) {
+                Log.d(TAG, "stage=SILENT_GOOGLE_SIGN_IN status=TOKEN_ACQUIRED")
                 completeGoogleIdTokenSignIn(token)
+            } else {
+                Log.d(TAG, "stage=SILENT_GOOGLE_SIGN_IN status=NO_TOKEN")
             }
         }
     }
 
     fun signInWithGoogle(activity: Activity?, credentialManager: CredentialManager) {
         if (activity == null) {
+            Log.e(TAG, "stage=GOOGLE_SIGN_IN status=FAILED category=ACTIVITY_NULL")
             _authState.value = AuthState.Error("Sign-in could not start. Please reopen the app and try again.")
             return
         }
         if (_authState.value is AuthState.SigningIn || _authState.value is AuthState.SigningUp) return
 
+        autoSignInJob?.cancel()
+        autoSignInAttempted = true
         _authNotice.value = null
         _authState.value = AuthState.SigningIn
 
@@ -146,20 +157,42 @@ class AuthViewModel(
                 try {
                     when (val outcome = acquireGoogleIdToken(activity, credentialManager)) {
                         is GoogleCredentialOutcome.Token -> {
+                            Log.d(TAG, "stage=GOOGLE_SIGN_IN status=TOKEN_ACQUIRED")
                             authRepository.signInWithGoogleIdToken(outcome.idToken, _authLanguage.value.code).fold(
                                 onSuccess = { (user, profile) ->
                                     lastSyncedUid = user.uid
+                                    Log.d(TAG, "stage=AUTH_STATE_TRANSITION state=SignedIn source=GOOGLE")
                                     _authState.value = AuthState.SignedIn(user, profile)
                                 },
                                 onFailure = { error ->
+                                    Log.e(TAG, "stage=AUTH_STATE_TRANSITION state=Error source=GOOGLE errorType=${error::class.simpleName}")
                                     _authState.value = AuthState.Error(authRepository.mapAuthException(error))
                                 }
                             )
                         }
                         is GoogleCredentialOutcome.Cancelled -> {
-                            _authState.value = AuthState.SignedOut
+                            if (outcome.isTechnicalCode) {
+                                Log.e(
+                                    TAG,
+                                    "stage=GOOGLE_SIGN_IN status=CREDENTIAL_FAILURE reason=TECHNICAL_CANCELLATION detail=${outcome.errorDetail ?: "none"}"
+                                )
+                            } else {
+                                Log.w(
+                                    TAG,
+                                    "stage=GOOGLE_SIGN_IN status=CANCELLED detail=${outcome.errorDetail ?: "dismissed"}"
+                                )
+                            }
+                            _authState.value = AuthState.Error(outcome.message)
+                        }
+                        is GoogleCredentialOutcome.NoAccount -> {
+                            Log.w(TAG, "stage=GOOGLE_SIGN_IN status=NO_GOOGLE_ACCOUNT")
+                            _authState.value = AuthState.Error(outcome.message)
                         }
                         is GoogleCredentialOutcome.Failure -> {
+                            Log.e(
+                                TAG,
+                                "stage=GOOGLE_SIGN_IN status=CREDENTIAL_FAILURE errorType=${outcome.errorType} detail=${outcome.errorDetail ?: "none"}"
+                            )
                             _authState.value = AuthState.Error(outcome.message)
                         }
                     }
@@ -180,9 +213,11 @@ class AuthViewModel(
             authRepository.signInWithGoogleIdToken(token, _authLanguage.value.code).fold(
                 onSuccess = { (user, profile) ->
                     lastSyncedUid = user.uid
+                    Log.d(TAG, "stage=AUTH_STATE_TRANSITION state=SignedIn source=SILENT_GOOGLE")
                     _authState.value = AuthState.SignedIn(user, profile)
                 },
                 onFailure = { error ->
+                    Log.e(TAG, "stage=AUTH_STATE_TRANSITION state=Error source=SILENT_GOOGLE errorType=${error::class.simpleName}")
                     _authState.value = AuthState.Error(authRepository.mapAuthException(error))
                 }
             )
@@ -199,9 +234,11 @@ class AuthViewModel(
                 authRepository.signInWithEmail(email, password, _authLanguage.value.code).fold(
                     onSuccess = { (user, profile) ->
                         lastSyncedUid = user.uid
+                        Log.d(TAG, "stage=AUTH_STATE_TRANSITION state=SignedIn source=EMAIL")
                         _authState.value = AuthState.SignedIn(user, profile)
                     },
                     onFailure = { error ->
+                        Log.e(TAG, "stage=AUTH_STATE_TRANSITION state=Error source=EMAIL errorType=${error::class.simpleName}")
                         _authState.value = AuthState.Error(authRepository.mapAuthException(error))
                     }
                 )
@@ -219,6 +256,7 @@ class AuthViewModel(
                 authRepository.signUpWithEmail(email, password, confirmPassword, _authLanguage.value.code).fold(
                     onSuccess = { outcome ->
                         lastSyncedUid = outcome.user.uid
+                        Log.d(TAG, "stage=AUTH_STATE_TRANSITION state=SignedIn source=EMAIL_SIGNUP")
                         _authNotice.value = if (outcome.verificationEmailSent) {
                             "Account created! Verification email sent to ${outcome.user.email ?: email.trim()}."
                         } else {
@@ -227,6 +265,7 @@ class AuthViewModel(
                         _authState.value = AuthState.SignedIn(outcome.user, outcome.profile)
                     },
                     onFailure = { error ->
+                        Log.e(TAG, "stage=AUTH_STATE_TRANSITION state=Error source=EMAIL_SIGNUP errorType=${error::class.simpleName}")
                         _authState.value = AuthState.Error(authRepository.mapAuthException(error))
                     }
                 )

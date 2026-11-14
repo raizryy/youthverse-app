@@ -333,3 +333,33 @@ test("Legacy ADMIN document missing uid and createdAt can update allowed fields 
     })
   );
 });
+
+test("Legacy ADMIN document with empty string uid can update allowed fields without failing rules", async () => {
+  const legacyEmptyUid = "legacy_empty_uid_admin";
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("users").doc(legacyEmptyUid).set({
+      uid: "",
+      email: "lwin09528@gmail.com",
+      role: "ADMIN",
+      preferredLanguage: "en",
+      createdAt: new Date(),
+    });
+  });
+
+  const db = testEnv.authenticatedContext(legacyEmptyUid, { email: "lwin09528@gmail.com" }).firestore();
+  await assertSucceeds(
+    db.collection("users").doc(legacyEmptyUid).update({
+      provider: "password",
+      preferredLanguage: "my",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Escalating USER to ADMIN or forging another user's UID still fails
+  await assertFails(
+    db.collection("users").doc(legacyEmptyUid).update({
+      uid: BOB_UID,
+      updatedAt: new Date(),
+    })
+  );
+});

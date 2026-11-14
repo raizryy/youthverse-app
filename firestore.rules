@@ -151,8 +151,9 @@ service cloud.firestore {
                        isValidUserProfile(incoming());
       allow update: if isSignedIn() && (
         (request.auth.uid == userId &&
-         (!('uid' in existing()) ? (!('uid' in incoming()) || incoming().uid == request.auth.uid)
-                                  : (incoming().uid == existing().uid && incoming().uid == request.auth.uid)) &&
+         (!('uid' in existing()) || existing().uid == null || existing().uid == ''
+             ? (!('uid' in incoming()) || incoming().uid == null || incoming().uid == '' || incoming().uid == request.auth.uid)
+             : (incoming().uid == existing().uid && incoming().uid == request.auth.uid)) &&
          (!('role' in existing()) ? (!('role' in incoming()) || incoming().role == 'USER')
                                   : (incoming().role == existing().role)) &&
          (!('createdAt' in existing()) ? (!('createdAt' in incoming()))

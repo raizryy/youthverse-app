@@ -8,10 +8,12 @@ import androidx.credentials.exceptions.GetCredentialUnsupportedException
 import androidx.credentials.exceptions.NoCredentialException
 import com.aistudio.youthverse.rvzkmq.data.repository.AuthRepository
 import com.aistudio.youthverse.rvzkmq.data.repository.AuthValidator
+import com.aistudio.youthverse.rvzkmq.data.repository.ProfileSyncException
 import com.aistudio.youthverse.rvzkmq.data.repository.UserRepository
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthException
+import com.google.firebase.firestore.FirebaseFirestoreException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -92,8 +94,6 @@ class AuthValidationAndErrorTest {
 
     @Test
     fun errorMapping_handlesGoogleCredentialAndFirebaseExceptions() {
-        // Use a dummy AuthRepository with Mockito-free mock? Wait: UserRepository requires Firestore,
-        // so initialize via Robolectric FirebaseOptions or check AuthRepository constructor
         val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         val app = if (com.google.firebase.FirebaseApp.getApps(ctx).isEmpty()) {
             com.google.firebase.FirebaseApp.initializeApp(
@@ -137,5 +137,15 @@ class AuthValidationAndErrorTest {
             repo.mapAuthException(FirebaseAuthException("ERROR_OPERATION_NOT_ALLOWED", "Disabled"))
                 .contains("not enabled")
         )
+
+        val fsDenied = FirebaseFirestoreException("PERMISSION_DENIED", FirebaseFirestoreException.Code.PERMISSION_DENIED)
+        val profileDenied = ProfileSyncException("get", FirebaseFirestoreException.Code.PERMISSION_DENIED, fsDenied)
+        val deniedMsg = repo.mapAuthException(profileDenied)
+        assertTrue(deniedMsg.contains("Firebase Auth") && deniedMsg.contains("Firestore"))
+
+        val fsUnavailable = FirebaseFirestoreException("UNAVAILABLE", FirebaseFirestoreException.Code.UNAVAILABLE)
+        val profileSyncFail = ProfileSyncException("create", FirebaseFirestoreException.Code.UNAVAILABLE, fsUnavailable)
+        val syncMsg = repo.mapAuthException(profileSyncFail)
+        assertTrue(syncMsg.contains("profile synchronization failed"))
     }
 }

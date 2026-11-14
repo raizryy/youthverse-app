@@ -1,6 +1,7 @@
 package com.aistudio.youthverse.rvzkmq.data.repository
 
 import android.content.Context
+import android.util.Log
 import com.aistudio.youthverse.rvzkmq.R
 import com.aistudio.youthverse.rvzkmq.data.OperationType
 import com.aistudio.youthverse.rvzkmq.data.handleFirestoreError
@@ -10,18 +11,32 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
+
+class ProfileSyncException(
+    val operation: String,
+    val firestoreCode: FirebaseFirestoreException.Code?,
+    cause: Throwable
+) : Exception(cause.message ?: "Profile sync failed at $operation", cause) {
+    val isPermissionDenied: Boolean
+        get() = firestoreCode == FirebaseFirestoreException.Code.PERMISSION_DENIED
+}
 
 class UserRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth
 ) {
+    private val profileSyncMutex = Mutex()
 
     constructor(context: Context) : this(
         db = FirebaseFirestore.getInstance(
@@ -47,17 +62,29 @@ class UserRepository(
         }
     }
 
-    suspend fun getOrCreateProfile(preferredLanguageOverride: String? = null): Result<UserProfile> {
-        val user = auth.currentUser ?: return Result.failure(IllegalStateException("Not authenticated"))
-        val uid = user.uid
-        val docRef = db.collection("users").document(uid)
-        val resolvedProvider = resolveProvider(user)
+    suspend fun getOrCreateProfile(preferredLanguageOverride: String? = null): Result<UserProfile> =
+        profileSyncMutex.withLock {
+            val user = auth.currentUser ?: return@withLock Result.failure(IllegalStateException("Not authenticated"))
+            val uid = user.uid
+            val docRef = db.collection("users").document(uid)
+            val resolvedProvider = resolveProvider(user)
 
-        return try {
-            val snapshot = docRef.get().await()
+        Log.d(TAG, "stage=FIRESTORE_PROFILE_GET status=START provider=$resolvedProvider")
+        val snapshot = try {
+            docRef.get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val fsCode = extractFirestoreCode(e)
+            Log.e(TAG, "stage=FIRESTORE_PROFILE_GET status=FAILED firestoreCode=${fsCode?.name ?: e::class.simpleName}")
+            handleFirestoreError(e, OperationType.GET, docRef.path)
+            return@withLock Result.failure(ProfileSyncException(operation = "get", firestoreCode = fsCode, cause = e))
+        }
+
+        try {
             if (snapshot.exists()) {
-                val profile = snapshot.toObject(UserProfile::class.java)
-                    ?: UserProfile(id = uid, uid = uid, email = user.email.orEmpty())
+                Log.d(TAG, "stage=FIRESTORE_PROFILE_GET status=EXISTS")
+                val profile = snapshotToUserProfile(snapshot, uid, user.email.orEmpty())
 
                 // Preserve existing profile fields; only fill missing metadata or update changed email
                 // without ever allowing client-controlled role or UID changes.
@@ -89,12 +116,19 @@ class UserRepository(
                 var appliedUpdates = false
                 if (updates.isNotEmpty()) {
                     updates["updatedAt"] = FieldValue.serverTimestamp()
+                    Log.d(TAG, "stage=FIRESTORE_PROFILE_UPDATE status=START fields=${updates.keys.sorted().joinToString(",")}")
                     try {
                         docRef.update(updates).await()
                         appliedUpdates = true
+                        Log.d(TAG, "stage=FIRESTORE_PROFILE_UPDATE status=SUCCESS")
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
+                        val fsCode = extractFirestoreCode(e)
+                        Log.w(
+                            TAG,
+                            "stage=FIRESTORE_PROFILE_UPDATE status=NON_FATAL_FAILURE firestoreCode=${fsCode?.name ?: e::class.simpleName}; continuing with existing profile"
+                        )
                         handleFirestoreError(e, OperationType.UPDATE, docRef.path)
                     }
                 }
@@ -112,6 +146,7 @@ class UserRepository(
                     }
                 )
             } else {
+                Log.d(TAG, "stage=FIRESTORE_PROFILE_CREATE status=START provider=$resolvedProvider")
                 val initialDisplayName = user.displayName?.trim()?.takeIf { it.isNotBlank() }
                     ?: user.email?.substringBefore("@")?.trim()?.takeIf { it.isNotBlank() }
                     ?: "Reader"
@@ -134,7 +169,17 @@ class UserRepository(
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
-                docRef.set(payload).await()
+                try {
+                    docRef.set(payload).await()
+                    Log.d(TAG, "stage=FIRESTORE_PROFILE_CREATE status=SUCCESS")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val fsCode = extractFirestoreCode(e)
+                    Log.e(TAG, "stage=FIRESTORE_PROFILE_CREATE status=FAILED firestoreCode=${fsCode?.name ?: e::class.simpleName}")
+                    handleFirestoreError(e, OperationType.CREATE, docRef.path)
+                    return@withLock Result.failure(ProfileSyncException(operation = "create", firestoreCode = fsCode, cause = e))
+                }
                 Result.success(
                     UserProfile(
                         id = uid,
@@ -151,9 +196,41 @@ class UserRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            val fsCode = extractFirestoreCode(e)
+            Log.e(TAG, "stage=FIRESTORE_PROFILE_SYNC status=FAILED error=${e::class.simpleName}")
             handleFirestoreError(e, OperationType.GET, docRef.path)
-            Result.failure(e)
+            Result.failure(ProfileSyncException(operation = "sync", firestoreCode = fsCode, cause = e))
         }
+    }
+
+    private fun snapshotToUserProfile(
+        snapshot: DocumentSnapshot,
+        fallbackUid: String,
+        fallbackEmail: String
+    ): UserProfile {
+        return runCatching {
+            snapshot.toObject(UserProfile::class.java)
+        }.onFailure { err ->
+            Log.w(TAG, "stage=FIRESTORE_PROFILE_PARSE status=FALLBACK error=${err::class.simpleName}")
+        }.getOrNull() ?: UserProfile(
+            id = snapshot.id,
+            uid = runCatching { snapshot.getString("uid") }.getOrNull().orEmpty().ifBlank { fallbackUid },
+            displayName = runCatching { snapshot.getString("displayName") }.getOrNull().orEmpty(),
+            email = runCatching { snapshot.getString("email") }.getOrNull().orEmpty().ifBlank { fallbackEmail },
+            photoUrl = runCatching { snapshot.getString("photoUrl") }.getOrNull().orEmpty(),
+            provider = runCatching { snapshot.getString("provider") }.getOrNull().orEmpty(),
+            role = runCatching { snapshot.getString("role") }.getOrNull().orEmpty().ifBlank { "USER" },
+            preferredLanguage = runCatching { snapshot.getString("preferredLanguage") }.getOrNull().orEmpty(),
+            createdAt = runCatching { snapshot.getTimestamp("createdAt") }.getOrNull(),
+            updatedAt = runCatching { snapshot.getTimestamp("updatedAt") }.getOrNull()
+        )
+    }
+
+    private fun extractFirestoreCode(error: Throwable): FirebaseFirestoreException.Code? {
+        return generateSequence(error) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
+            ?.code
     }
 
     private fun resolveProvider(user: FirebaseUser): String {
@@ -174,12 +251,13 @@ class UserRepository(
         val docRef = db.collection("users").document(uid)
         val registration = docRef.addSnapshotListener { snapshot, error ->
             if (error != null) {
+                Log.e(TAG, "stage=FIRESTORE_PROFILE_OBSERVE status=FAILED firestoreCode=${error.code.name}")
                 handleFirestoreError(error, OperationType.GET, docRef.path)
                 close(error)
                 return@addSnapshotListener
             }
             if (snapshot != null && snapshot.exists()) {
-                val profile = snapshot.toObject(UserProfile::class.java)
+                val profile = snapshotToUserProfile(snapshot, uid, auth.currentUser?.email.orEmpty())
                 trySend(profile)
             } else {
                 trySend(null)
@@ -201,12 +279,19 @@ class UserRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            Log.d(TAG, "stage=FIRESTORE_LANGUAGE_UPDATE status=SUCCESS lang=$lang")
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            val fsCode = extractFirestoreCode(e)
+            Log.e(TAG, "stage=FIRESTORE_LANGUAGE_UPDATE status=FAILED firestoreCode=${fsCode?.name ?: e::class.simpleName}")
             handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-            Result.failure(e)
+            Result.failure(ProfileSyncException(operation = "updateLanguage", firestoreCode = fsCode, cause = e))
         }
+    }
+
+    companion object {
+        private const val TAG = "YouthVerseProfile"
     }
 }

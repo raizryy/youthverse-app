@@ -163,19 +163,27 @@ class AuthRepositoryRuleTest : FirestoreEmulatorTestBase() {
         }
 
         // Simulate app restart by creating a new AuthViewModel while FirebaseAuth still holds currentUser
-        val restartedViewModel = AuthViewModel(authRepo)
-        val restoredState = withTimeout(TEST_TIMEOUT_MS) {
-            restartedViewModel.authState.first { it is AuthState.SignedIn }
-        } as AuthState.SignedIn
-        assertEquals(createdUser.uid, restoredState.user.uid)
-        assertNotNull(restoredState.profile)
+        val viewModelStore = androidx.lifecycle.ViewModelStore()
+        try {
+            val restartedViewModel = androidx.lifecycle.ViewModelProvider(
+                viewModelStore,
+                AuthViewModel.factory(authRepo)
+            )[AuthViewModel::class.java]
+            val restoredState = withTimeout(TEST_TIMEOUT_MS) {
+                restartedViewModel.authState.first { it is AuthState.SignedIn }
+            } as AuthState.SignedIn
+            assertEquals(createdUser.uid, restoredState.user.uid)
+            assertNotNull(restoredState.profile)
 
-        restartedViewModel.signOut(credentialManager = null)
-        val signedOutState = withTimeout(TEST_TIMEOUT_MS) {
-            restartedViewModel.authState.first { it is AuthState.SignedOut }
+            restartedViewModel.signOut(credentialManager = null)
+            val signedOutState = withTimeout(TEST_TIMEOUT_MS) {
+                restartedViewModel.authState.first { it is AuthState.SignedOut }
+            }
+            assertTrue(signedOutState is AuthState.SignedOut)
+            assertNull(auth.currentUser)
+        } finally {
+            viewModelStore.clear()
         }
-        assertTrue(signedOutState is AuthState.SignedOut)
-        assertNull(auth.currentUser)
     }
 
     @Test
@@ -224,6 +232,49 @@ class AuthRepositoryRuleTest : FirestoreEmulatorTestBase() {
         val (_, profile) = loginResult.getOrThrow()
         assertEquals("ADMIN", profile.role)
         assertEquals("password", profile.provider)
+    }
+
+    @Test
+    fun signInWithEmail_legacyAdminDocWithEmptyUid_succeedsAndPreservesAdminRole() = runBlocking {
+        val (_, authRepo) = newRepositories()
+        val email = "legacy_admin_${UUID.randomUUID()}@youthverse.test"
+
+        val createdUser = withContext(Dispatchers.IO) {
+            withTimeout(TEST_TIMEOUT_MS) {
+                authRepo.signUpWithEmail(email, "LegacyAdmin123!", "LegacyAdmin123!").getOrThrow().user
+            }
+        }
+
+        withContext(Dispatchers.IO) {
+            withTimeout(TEST_TIMEOUT_MS) {
+                authRepo.signOut(credentialManager = null)
+                val adminUser = auth.signInWithEmailAndPassword("admin@test.com", "password123").await().user!!
+                adminUser.getIdToken(true).await()
+                firestore.collection("users").document(createdUser.uid).update(
+                    mapOf(
+                        "uid" to "",
+                        "role" to "ADMIN",
+                        "provider" to "",
+                        "preferredLanguage" to ""
+                    )
+                ).await()
+                val updatedDoc = firestore.collection("users").document(createdUser.uid).get(com.google.firebase.firestore.Source.SERVER).await()
+                assertEquals("ADMIN", updatedDoc.getString("role"))
+                authRepo.signOut(credentialManager = null)
+            }
+        }
+
+        val loginResult = withContext(Dispatchers.IO) {
+            withTimeout(TEST_TIMEOUT_MS) {
+                authRepo.signInWithEmail(email, "LegacyAdmin123!", preferredLanguage = "en")
+            }
+        }
+
+        assertTrue("Legacy empty-uid ADMIN email login should succeed: ${loginResult.exceptionOrNull()?.message}", loginResult.isSuccess)
+        val (_, profile) = loginResult.getOrThrow()
+        assertEquals("ADMIN", profile.role)
+        assertEquals("password", profile.provider)
+        assertEquals("en", profile.preferredLanguage)
     }
 
     private companion object {

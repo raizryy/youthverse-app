@@ -1,5 +1,6 @@
 package com.aistudio.youthverse.rvzkmq.ui.navigation
 
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -94,10 +95,14 @@ fun MainAppNavigation(
                 val result = contentRepository.getContent(contentId)
                 val content = result.getOrNull()
                 if (content == null) {
+                    val err = result.exceptionOrNull()
+                    Log.e("YouthVerseNav", "stage=NAVIGATION_OPEN_READER status=FAILED category=NAVIGATION_FAILURE errorType=${err?.javaClass?.simpleName ?: "NOT_FOUND"}")
                     snackbarHostState.showSnackbar("Unable to open chapter. Please check your connection and try again.")
                 } else if (content.contentType in setOf("MANGA", "MANHWA", "MANHUA")) {
+                    Log.d("YouthVerseNav", "stage=NAVIGATION_OPEN_READER status=SUCCESS target=MangaReader")
                     navigateTo(Screen.MangaReader(contentId, chapterId))
                 } else {
+                    Log.d("YouthVerseNav", "stage=NAVIGATION_OPEN_READER status=SUCCESS target=NovelReader")
                     navigateTo(Screen.NovelReader(contentId, chapterId))
                 }
             } finally {

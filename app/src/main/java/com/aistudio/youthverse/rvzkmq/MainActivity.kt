@@ -1,6 +1,7 @@
 package com.aistudio.youthverse.rvzkmq
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -75,6 +76,9 @@ class MainActivity : ComponentActivity() {
             }
             is AuthState.SignedIn -> {
               val uid = state.user.uid
+              LaunchedEffect(uid) {
+                Log.d("YouthVerseNav", "stage=NAVIGATION_ENTER_HOME status=SUCCESS hasProfile=${state.profile != null}")
+              }
               key(uid) {
                 MainAppNavigation(
                   userRepository = userRepository,

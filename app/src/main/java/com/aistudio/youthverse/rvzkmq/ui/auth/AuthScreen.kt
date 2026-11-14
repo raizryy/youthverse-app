@@ -3,6 +3,7 @@ package com.aistudio.youthverse.rvzkmq.ui.auth
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.MutableContextWrapper
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -103,7 +104,8 @@ fun AuthFlow(
     authState: AuthState
 ) {
     val context = LocalContext.current
-    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val activityForCreds = remember(context) { resolveActivity(context) }
+    val credentialManager = remember(context) { CredentialManager.create(activityForCreds ?: context) }
     val language by authViewModel.authLanguage.collectAsStateWithLifecycle()
     val passwordResetState by authViewModel.passwordResetState.collectAsStateWithLifecycle()
     var currentRoute by rememberSaveable { mutableStateOf(AuthRoute.WELCOME) }
@@ -571,7 +573,7 @@ internal suspend fun trySilentGoogleIdToken(
         .build()
 
     return try {
-        val result = credentialManager.getCredential(activity, request)
+        val result = credentialManager.getCredential(MutableContextWrapper(activity), request)
         val credential = result.credential
         if (credential is CustomCredential &&
             credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
@@ -582,9 +584,10 @@ internal suspend fun trySilentGoogleIdToken(
         }
     } catch (e: CancellationException) {
         throw e
-    } catch (_: Exception) {
+    } catch (e: Exception) {
         // Silent sign-in is optional. Keep the sign-in screen usable when no
         // authorized Google account is available or the user dismisses it.
+        Log.d("YouthVerseAuth", "stage=SILENT_CREDENTIAL_MANAGER status=SKIPPED errorType=${e::class.simpleName}")
         null
     }
 }
@@ -594,12 +597,23 @@ internal suspend fun acquireGoogleIdToken(
     credentialManager: CredentialManager
 ): GoogleCredentialOutcome {
     val activity = resolveActivity(context)
-        ?: return GoogleCredentialOutcome.Failure("Sign-in could not start. Please reopen the app and try again.")
+    if (activity == null) {
+        Log.e("YouthVerseAuth", "stage=GOOGLE_ACTIVITY_RESOLVE status=FAILED")
+        return GoogleCredentialOutcome.Failure(
+            message = "Sign-in could not start. Please reopen the app and try again.",
+            errorType = "ActivityNull"
+        )
+    }
 
     val clientId = AuthViewModel.resolveDefaultWebClientId(activity)
-        ?: return GoogleCredentialOutcome.Failure(
-            "Google Sign-In is not configured. Check the Firebase Android app and web client ID."
+    if (clientId == null) {
+        Log.e("YouthVerseAuth", "stage=GOOGLE_WEB_CLIENT_ID status=MISSING")
+        return GoogleCredentialOutcome.Failure(
+            message = "Google Sign-In is not configured. Check the Firebase Android app and web client ID.",
+            errorType = "MissingWebClientId"
         )
+    }
+    Log.d("YouthVerseAuth", "stage=GOOGLE_WEB_CLIENT_ID status=PRESENT clientIdSuffix=${clientId.takeLast(18)}")
 
     val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
     val request = GetCredentialRequest.Builder()
@@ -607,35 +621,93 @@ internal suspend fun acquireGoogleIdToken(
         .build()
 
     return try {
-        val result = credentialManager.getCredential(activity, request)
+        Log.d("YouthVerseAuth", "stage=CREDENTIAL_MANAGER_REQUEST status=LAUNCHING")
+        val result = credentialManager.getCredential(MutableContextWrapper(activity), request)
         val credential = result.credential
+        Log.d(
+            "YouthVerseAuth",
+            "stage=CREDENTIAL_MANAGER_RESULT status=RECEIVED credentialClass=${credential::class.simpleName} isGoogleIdToken=${credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL}"
+        )
         if (credential !is CustomCredential ||
             credential.type != TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
         ) {
-            GoogleCredentialOutcome.Failure("Google returned an unsupported sign-in credential. Please try again.")
+            Log.e("YouthVerseAuth", "stage=CREDENTIAL_TYPE_CHECK status=UNSUPPORTED")
+            GoogleCredentialOutcome.Failure(
+                message = "Google returned an unsupported sign-in credential. Please try again.",
+                errorType = "UnsupportedCredentialType"
+            )
         } else {
             val token = GoogleIdTokenCredential.createFrom(credential.data).idToken
             if (token.isBlank()) {
-                GoogleCredentialOutcome.Failure("Google Sign-In returned an empty ID token. Please try again.")
+                Log.e("YouthVerseAuth", "stage=GOOGLE_ID_TOKEN_PARSE status=BLANK")
+                GoogleCredentialOutcome.Failure(
+                    message = "Google Sign-In returned an empty ID token. Please try again.",
+                    errorType = "BlankIdToken"
+                )
             } else {
+                Log.d("YouthVerseAuth", "stage=GOOGLE_ID_TOKEN_PARSE status=SUCCESS length=${token.length}")
                 GoogleCredentialOutcome.Token(token)
             }
         }
     } catch (e: GetCredentialCancellationException) {
-        Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
-        GoogleCredentialOutcome.Failure(friendlyAuthError(e))
+        val rawMsg = e.message.orEmpty()
+        val isTechnicalCode = isTechnicalCredentialCancellation(rawMsg)
+        Log.w(
+            "YouthVerseAuth",
+            "stage=CREDENTIAL_MANAGER_REQUEST status=CANCELLED_OR_REJECTED technical=$isTechnicalCode errorType=${e::class.simpleName} errorMessage=$rawMsg"
+        )
+        GoogleCredentialOutcome.Cancelled(
+            message = friendlyAuthError(e),
+            isTechnicalCode = isTechnicalCode,
+            errorDetail = rawMsg.takeIf { it.isNotBlank() }?.take(120)
+        )
+    } catch (e: NoCredentialException) {
+        Log.w("YouthVerseAuth", "stage=CREDENTIAL_MANAGER_REQUEST status=NO_CREDENTIAL errorType=${e::class.simpleName}")
+        GoogleCredentialOutcome.NoAccount(friendlyAuthError(e))
     } catch (e: CancellationException) {
         throw e
+    } catch (e: GetCredentialException) {
+        Log.e(
+            "YouthVerseAuth",
+            "stage=CREDENTIAL_MANAGER_REQUEST status=FAILED credType=${e.type} errorClass=${e::class.simpleName} errorMessage=${e.message}"
+        )
+        GoogleCredentialOutcome.Failure(
+            message = friendlyAuthError(e),
+            errorType = e::class.simpleName ?: "GetCredentialException",
+            errorDetail = e.type
+        )
     } catch (e: Exception) {
-        Log.e("Auth", "Google Sign-In failed: ${e::class.simpleName} - ${e.message}", e)
-        GoogleCredentialOutcome.Failure(friendlyAuthError(e))
+        Log.e("YouthVerseAuth", "stage=CREDENTIAL_MANAGER_REQUEST status=FAILED errorClass=${e::class.simpleName}")
+        GoogleCredentialOutcome.Failure(
+            message = friendlyAuthError(e),
+            errorType = e::class.simpleName ?: "Exception"
+        )
     }
+}
+
+private fun isTechnicalCredentialCancellation(message: String): Boolean {
+    return message.contains("DEVELOPER_ERROR", ignoreCase = true) ||
+        message.contains("10:", ignoreCase = true) ||
+        message.contains("28444") ||
+        message.contains("reauth failed", ignoreCase = true) ||
+        message.contains("16:") ||
+        message.contains("28436") ||
+        message.contains("network", ignoreCase = true)
 }
 
 internal sealed class GoogleCredentialOutcome {
     data class Token(val idToken: String) : GoogleCredentialOutcome()
-    data object Cancelled : GoogleCredentialOutcome()
-    data class Failure(val message: String) : GoogleCredentialOutcome()
+    data class Cancelled(
+        val message: String,
+        val isTechnicalCode: Boolean = false,
+        val errorDetail: String? = null
+    ) : GoogleCredentialOutcome()
+    data class NoAccount(val message: String) : GoogleCredentialOutcome()
+    data class Failure(
+        val message: String,
+        val errorType: String,
+        val errorDetail: String? = null
+    ) : GoogleCredentialOutcome()
 }
 
 private fun friendlyAuthError(error: Exception): String {

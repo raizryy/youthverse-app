@@ -24,6 +24,7 @@ import com.google.firebase.auth.FirebaseAuthWeakPasswordException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.awaitClose
@@ -109,6 +110,7 @@ class AuthRepository(
 
     fun observeAuthUser(): Flow<FirebaseUser?> = callbackFlow {
         val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+            Log.d(TAG, "stage=AUTH_STATE_LISTENER hasUser=${firebaseAuth.currentUser != null}")
             trySend(firebaseAuth.currentUser)
         }
         auth.addAuthStateListener(listener)
@@ -122,21 +124,32 @@ class AuthRepository(
         preferredLanguage: String = "my"
     ): Result<Pair<FirebaseUser, UserProfile>> {
         if (idToken.isBlank()) {
+            Log.e(TAG, "stage=ID_TOKEN_VALIDATION status=FAILED reason=BLANK_TOKEN")
             return Result.failure(IllegalArgumentException("Google sign-in did not return an ID token."))
         }
-        return try {
+        val tokenSegments = idToken.count { it == '.' } + 1
+        if (tokenSegments != 3) {
+            Log.w(TAG, "stage=ID_TOKEN_VALIDATION status=UNEXPECTED_FORMAT segments=$tokenSegments")
+        } else {
+            Log.d(TAG, "stage=ID_TOKEN_VALIDATION status=VALID segments=3 length=${idToken.length}")
+        }
+
+        val user = try {
+            Log.d(TAG, "stage=FIREBASE_AUTH_GOOGLE_EXCHANGE status=START")
             val credential = GoogleAuthProvider.getCredential(idToken, null)
             val authResult = auth.signInWithCredential(credential).await()
-            val user = authResult.user
+            authResult.user
                 ?: return Result.failure(IllegalStateException("Google Sign-In did not return an authenticated user."))
-            val profile = userRepository.getOrCreateProfile(preferredLanguage).getOrThrow()
-            Result.success(user to profile)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Firebase Google credential sign-in failed: ${e::class.simpleName}")
-            Result.failure(e)
+            val code = (e as? FirebaseAuthException)?.errorCode
+            Log.e(TAG, "stage=FIREBASE_AUTH_GOOGLE_EXCHANGE status=FAILED category=FIREBASE_AUTH_FAILURE errorType=${e::class.simpleName} errorCode=$code")
+            return Result.failure(e)
         }
+
+        Log.d(TAG, "stage=FIREBASE_AUTH_GOOGLE_EXCHANGE status=SUCCESS")
+        return syncProfileAfterAuth(user, preferredLanguage, signInMethod = "google")
     }
 
     suspend fun signInWithEmail(
@@ -148,18 +161,21 @@ class AuthRepository(
         if (!validation.isValid) {
             return Result.failure(IllegalArgumentException(validation.firstError))
         }
-        return try {
+        val user = try {
+            Log.d(TAG, "stage=FIREBASE_AUTH_EMAIL_SIGN_IN status=START")
             val authResult = auth.signInWithEmailAndPassword(email.trim(), password).await()
-            val user = authResult.user
+            authResult.user
                 ?: return Result.failure(IllegalStateException("Sign-in did not return an authenticated user."))
-            val profile = userRepository.getOrCreateProfile(preferredLanguage).getOrThrow()
-            Result.success(user to profile)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Email sign-in failed: ${e::class.simpleName}")
-            Result.failure(e)
+            val code = (e as? FirebaseAuthException)?.errorCode
+            Log.e(TAG, "stage=FIREBASE_AUTH_EMAIL_SIGN_IN status=FAILED category=FIREBASE_AUTH_FAILURE errorType=${e::class.simpleName} errorCode=$code")
+            return Result.failure(e)
         }
+
+        Log.d(TAG, "stage=FIREBASE_AUTH_EMAIL_SIGN_IN status=SUCCESS")
+        return syncProfileAfterAuth(user, preferredLanguage, signInMethod = "email")
     }
 
     suspend fun signUpWithEmail(
@@ -172,35 +188,72 @@ class AuthRepository(
         if (!validation.isValid) {
             return Result.failure(IllegalArgumentException(validation.firstError))
         }
-        return try {
+        val user = try {
+            Log.d(TAG, "stage=FIREBASE_AUTH_EMAIL_SIGN_UP status=START")
             val authResult = auth.createUserWithEmailAndPassword(email.trim(), password).await()
-            val user = authResult.user
+            authResult.user
                 ?: return Result.failure(IllegalStateException("Registration did not return an authenticated user."))
-
-            val verificationEmailSent = try {
-                user.sendEmailVerification().await()
-                true
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Verification email could not be sent right after sign-up: ${e::class.simpleName}")
-                false
-            }
-
-            val profile = userRepository.getOrCreateProfile(preferredLanguage).getOrThrow()
-            Result.success(
-                SignUpOutcome(
-                    user = user,
-                    profile = profile,
-                    verificationEmailSent = verificationEmailSent
-                )
-            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Email sign-up failed: ${e::class.simpleName}")
-            Result.failure(e)
+            val code = (e as? FirebaseAuthException)?.errorCode
+            Log.e(TAG, "stage=FIREBASE_AUTH_EMAIL_SIGN_UP status=FAILED category=FIREBASE_AUTH_FAILURE errorType=${e::class.simpleName} errorCode=$code")
+            return Result.failure(e)
         }
+
+        Log.d(TAG, "stage=FIREBASE_AUTH_EMAIL_SIGN_UP status=SUCCESS")
+        val verificationEmailSent = try {
+            user.sendEmailVerification().await()
+            Log.d(TAG, "stage=FIREBASE_AUTH_VERIFICATION_EMAIL status=SENT")
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "stage=FIREBASE_AUTH_VERIFICATION_EMAIL status=FAILED errorType=${e::class.simpleName}")
+            false
+        }
+
+        val syncResult = syncProfileAfterAuth(user, preferredLanguage, signInMethod = "email_signup")
+        return syncResult.map { (syncedUser, profile) ->
+            SignUpOutcome(
+                user = syncedUser,
+                profile = profile,
+                verificationEmailSent = verificationEmailSent
+            )
+        }
+    }
+
+    private suspend fun syncProfileAfterAuth(
+        user: FirebaseUser,
+        preferredLanguage: String,
+        signInMethod: String
+    ): Result<Pair<FirebaseUser, UserProfile>> {
+        Log.d(TAG, "stage=PROFILE_SYNC status=START method=$signInMethod")
+        val profileResult = userRepository.getOrCreateProfile(preferredLanguage)
+        return profileResult.fold(
+            onSuccess = { profile ->
+                Log.d(TAG, "stage=PROFILE_SYNC status=SUCCESS method=$signInMethod role=${profile.role}")
+                Result.success(user to profile)
+            },
+            onFailure = { error ->
+                val syncError = error as? ProfileSyncException
+                val category = if (syncError?.isPermissionDenied == true || extractFirestoreException(error)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                    "FIRESTORE_PERMISSION_FAILURE"
+                } else {
+                    "PROFILE_SYNC_FAILURE"
+                }
+                Log.e(
+                    TAG,
+                    "stage=PROFILE_SYNC status=FAILED method=$signInMethod category=$category operation=${syncError?.operation ?: "unknown"} firestoreCode=${syncError?.firestoreCode?.name ?: extractFirestoreException(error)?.code?.name}"
+                )
+                // Keep FirebaseAuth session aligned with failed sign-in state so retries do not
+                // leave a half-signed-in user behind an AuthState.Error screen.
+                withContext(NonCancellable) {
+                    runCatching { auth.signOut() }
+                }
+                Result.failure(error)
+            }
+        )
     }
 
     suspend fun sendPasswordResetEmail(email: String): Result<Unit> {
@@ -209,12 +262,15 @@ class AuthRepository(
             return Result.failure(IllegalArgumentException(emailError))
         }
         return try {
+            Log.d(TAG, "stage=FIREBASE_AUTH_PASSWORD_RESET status=START")
             auth.sendPasswordResetEmail(email.trim()).await()
+            Log.d(TAG, "stage=FIREBASE_AUTH_PASSWORD_RESET status=SUCCESS")
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Password reset failed: ${e::class.simpleName}")
+            val code = (e as? FirebaseAuthException)?.errorCode
+            Log.e(TAG, "stage=FIREBASE_AUTH_PASSWORD_RESET status=FAILED category=FIREBASE_AUTH_FAILURE errorCode=$code")
             Result.failure(e)
         }
     }
@@ -224,13 +280,13 @@ class AuthRepository(
     ): Result<Pair<FirebaseUser, UserProfile>> {
         val user = auth.currentUser
             ?: return Result.failure(IllegalStateException("No authenticated user session."))
-        return try {
-            val profile = userRepository.getOrCreateProfile(preferredLanguage).getOrThrow()
-            Result.success(user to profile)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Result.failure(e)
+        Log.d(TAG, "stage=SESSION_RESTORE_PROFILE_SYNC status=START")
+        return userRepository.getOrCreateProfile(preferredLanguage).map { profile ->
+            Log.d(TAG, "stage=SESSION_RESTORE_PROFILE_SYNC status=SUCCESS")
+            user to profile
+        }.onFailure { error ->
+            val fsCode = extractFirestoreException(error)?.code
+            Log.w(TAG, "stage=SESSION_RESTORE_PROFILE_SYNC status=FAILED firestoreCode=${fsCode?.name ?: error::class.simpleName}")
         }
     }
 
@@ -240,16 +296,34 @@ class AuthRepository(
                 try {
                     credentialManager.clearCredentialState(ClearCredentialStateRequest())
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to clear credential state: ${e.message}")
+                    Log.w(TAG, "stage=SIGN_OUT_CLEAR_CREDENTIAL status=WARNING error=${e::class.simpleName}")
                 }
             }
             auth.signOut()
+            Log.d(TAG, "stage=FIREBASE_AUTH_SIGN_OUT status=SUCCESS")
         }
     }
 
     fun mapAuthException(error: Throwable): String {
         if (error is IllegalArgumentException && !error.message.isNullOrBlank()) {
             return error.message!!
+        }
+
+        if (error is ProfileSyncException) {
+            return if (error.isPermissionDenied) {
+                "Sign-in succeeded in Firebase Auth, but Firestore denied access to your profile (${error.operation}). Please verify deployed Firestore Security Rules."
+            } else {
+                "Sign-in succeeded in Firebase Auth, but profile synchronization failed (${error.firestoreCode?.name ?: error.operation}). Please check your connection and try again."
+            }
+        }
+
+        val firestoreError = extractFirestoreException(error)
+        if (firestoreError != null) {
+            return if (firestoreError.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                "Sign-in succeeded in Firebase Auth, but Firestore returned PERMISSION_DENIED. Please verify deployed Firestore Security Rules."
+            } else {
+                "Sign-in succeeded in Firebase Auth, but Firestore profile sync failed (${firestoreError.code.name}). Please try again."
+            }
         }
 
         return when (error) {
@@ -287,6 +361,12 @@ class AuthRepository(
                 error.localizedMessage?.takeIf { it.isNotBlank() && it.length < 180 }
                     ?: "Authentication failed. Please check your connection and try again."
         }
+    }
+
+    private fun extractFirestoreException(error: Throwable): FirebaseFirestoreException? {
+        return generateSequence(error) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
     }
 
     private fun mapCredentialMessage(rawMessage: String?): String {
