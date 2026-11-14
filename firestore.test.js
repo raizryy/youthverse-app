@@ -230,3 +230,40 @@ test("A user cannot directly delete their profile and orphan nested data", async
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   await assertFails(aliceDb.collection("users").doc(ALICE_UID).delete());
 });
+
+test("User can create their own profile with role USER and valid provider, but cannot self-assign ADMIN", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "alice@example.com" }).firestore();
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).set({
+      uid: ALICE_UID,
+      email: "alice@example.com",
+      displayName: "Alice",
+      photoUrl: "",
+      provider: "password",
+      role: "USER",
+      preferredLanguage: "en",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+  );
+
+  const bobDb = testEnv.authenticatedContext(BOB_UID, { email: "bob@example.com" }).firestore();
+  await assertFails(
+    bobDb.collection("users").doc(BOB_UID).set({
+      uid: BOB_UID,
+      email: "bob@example.com",
+      provider: "password",
+      role: "ADMIN",
+      createdAt: new Date(),
+    })
+  );
+  await assertFails(
+    bobDb.collection("users").doc(BOB_UID).set({
+      uid: BOB_UID,
+      email: "bob@example.com",
+      provider: "invalid_provider",
+      role: "USER",
+      createdAt: new Date(),
+    })
+  );
+});

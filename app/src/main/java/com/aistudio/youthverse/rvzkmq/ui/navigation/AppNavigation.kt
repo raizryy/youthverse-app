@@ -55,13 +55,22 @@ fun MainAppNavigation(
     socialRepository: SocialRepository,
     currentThemeMode: AppThemeMode,
     onThemeChange: (AppThemeMode) -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    authNotice: String? = null,
+    onDismissAuthNotice: () -> Unit = {}
 ) {
     var backStack by remember { mutableStateOf(listOf<Screen>(Screen.Home)) }
     val currentScreen = backStack.lastOrNull() ?: Screen.Home
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var isOpeningReader by remember { mutableStateOf(false) }
+
+    LaunchedEffect(authNotice) {
+        if (!authNotice.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(authNotice)
+            onDismissAuthNotice()
+        }
+    }
 
     fun navigateTo(screen: Screen) {
         backStack = backStack + screen

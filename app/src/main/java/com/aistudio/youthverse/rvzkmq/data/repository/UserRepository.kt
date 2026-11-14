@@ -6,6 +6,9 @@ import com.aistudio.youthverse.rvzkmq.data.OperationType
 import com.aistudio.youthverse.rvzkmq.data.handleFirestoreError
 import com.aistudio.youthverse.rvzkmq.data.model.UserProfile
 import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -15,15 +18,17 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
-class UserRepository(private val db: FirebaseFirestore) {
+class UserRepository(
+    private val db: FirebaseFirestore,
+    private val auth: FirebaseAuth = Firebase.auth
+) {
 
     constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
+        db = FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
-        )
+        ),
+        auth = Firebase.auth
     )
-
-    private val auth = Firebase.auth
 
     fun getCurrentUserId(): String? = auth.currentUser?.uid
 
@@ -42,10 +47,11 @@ class UserRepository(private val db: FirebaseFirestore) {
         }
     }
 
-    suspend fun getOrCreateProfile(): Result<UserProfile> {
+    suspend fun getOrCreateProfile(preferredLanguageOverride: String? = null): Result<UserProfile> {
         val user = auth.currentUser ?: return Result.failure(IllegalStateException("Not authenticated"))
         val uid = user.uid
         val docRef = db.collection("users").document(uid)
+        val resolvedProvider = resolveProvider(user)
 
         return try {
             val snapshot = docRef.get().await()
@@ -53,21 +59,24 @@ class UserRepository(private val db: FirebaseFirestore) {
                 val profile = snapshot.toObject(UserProfile::class.java)
                     ?: UserProfile(id = uid, uid = uid, email = user.email.orEmpty())
 
-                // Keep public profile metadata synchronized with the authenticated
-                // Firebase identity without allowing client-controlled role changes.
+                // Preserve existing profile fields; only fill missing metadata or update changed email
+                // without ever allowing client-controlled role or UID changes.
                 val updates = mutableMapOf<String, Any>()
                 val authName = user.displayName?.trim().orEmpty()
                 val authEmail = user.email?.trim().orEmpty()
                 val authPhoto = user.photoUrl?.toString().orEmpty()
 
-                if (authName.isNotBlank() && authName != profile.displayName) {
+                if (authName.isNotBlank() && (profile.displayName.isBlank() || profile.displayName == "Reader")) {
                     updates["displayName"] = authName.take(100)
                 }
                 if (authEmail.isNotBlank() && authEmail != profile.email) {
                     updates["email"] = authEmail.take(200)
                 }
-                if (authPhoto.isNotBlank() && authPhoto != profile.photoUrl) {
+                if (authPhoto.isNotBlank() && profile.photoUrl.isBlank()) {
                     updates["photoUrl"] = authPhoto.take(500)
+                }
+                if (profile.provider.isBlank()) {
+                    updates["provider"] = resolvedProvider
                 }
 
                 if (updates.isNotEmpty()) {
@@ -77,16 +86,29 @@ class UserRepository(private val db: FirebaseFirestore) {
                 Result.success(profile.copy(
                     displayName = (updates["displayName"] as? String) ?: profile.displayName,
                     email = (updates["email"] as? String) ?: profile.email,
-                    photoUrl = (updates["photoUrl"] as? String) ?: profile.photoUrl
+                    photoUrl = (updates["photoUrl"] as? String) ?: profile.photoUrl,
+                    provider = (updates["provider"] as? String) ?: profile.provider
                 ))
             } else {
+                val initialDisplayName = user.displayName?.trim()?.takeIf { it.isNotBlank() }
+                    ?: user.email?.substringBefore("@")?.trim()?.takeIf { it.isNotBlank() }
+                    ?: "Reader"
+                val initialLang = if (preferredLanguageOverride in setOf("my", "en")) {
+                    preferredLanguageOverride!!
+                } else {
+                    "my"
+                }
+                val initialEmail = user.email?.trim().orEmpty().take(200)
+                val initialPhoto = user.photoUrl?.toString().orEmpty().take(500)
+
                 val payload = hashMapOf<String, Any>(
                     "uid" to uid,
-                    "displayName" to (user.displayName ?: "Reader"),
-                    "email" to (user.email ?: ""),
-                    "photoUrl" to (user.photoUrl?.toString() ?: ""),
+                    "displayName" to initialDisplayName.take(100),
+                    "email" to initialEmail,
+                    "photoUrl" to initialPhoto,
+                    "provider" to resolvedProvider,
                     "role" to "USER", // Rules mandate role == 'USER' on client create
-                    "preferredLanguage" to "my",
+                    "preferredLanguage" to initialLang,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
@@ -95,11 +117,12 @@ class UserRepository(private val db: FirebaseFirestore) {
                     UserProfile(
                         id = uid,
                         uid = uid,
-                        displayName = user.displayName ?: "Reader",
-                        email = user.email ?: "",
-                        photoUrl = user.photoUrl?.toString() ?: "",
+                        displayName = initialDisplayName.take(100),
+                        email = initialEmail,
+                        photoUrl = initialPhoto,
+                        provider = resolvedProvider,
                         role = "USER",
-                        preferredLanguage = "my"
+                        preferredLanguage = initialLang
                     )
                 )
             }
@@ -108,6 +131,14 @@ class UserRepository(private val db: FirebaseFirestore) {
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.GET, docRef.path)
             Result.failure(e)
+        }
+    }
+
+    private fun resolveProvider(user: FirebaseUser): String {
+        return if (user.providerData.any { it.providerId == GoogleAuthProvider.PROVIDER_ID }) {
+            "google"
+        } else {
+            "password"
         }
     }
 

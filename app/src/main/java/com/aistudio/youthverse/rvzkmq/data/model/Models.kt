@@ -13,6 +13,7 @@ data class UserProfile(
     val displayName: String = "",
     val email: String = "",
     val photoUrl: String = "",
+    val provider: String = "", // "google" or "password"
     val role: String = "USER", // "USER" or "ADMIN"
     val preferredLanguage: String = "my", // "my" or "en"
     @ServerTimestamp val createdAt: Timestamp? = null,

@@ -9,6 +9,7 @@
         "displayName": { "type": "string" },
         "email": { "type": "string", "format": "email" },
         "photoUrl": { "type": "string" },
+        "provider": { "type": "string", "enum": ["google", "password"] },
         "role": { "type": "string", "enum": ["USER"] },
         "preferredLanguage": { "type": "string", "enum": ["my", "en"] },
         "createdAt": { "type": "string", "format": "date-time" },
