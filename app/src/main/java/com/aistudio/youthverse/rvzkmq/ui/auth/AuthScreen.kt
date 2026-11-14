@@ -2,6 +2,7 @@ package com.aistudio.youthverse.rvzkmq.ui.auth
 
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -72,6 +73,8 @@ import com.aistudio.youthverse.rvzkmq.ui.theme.BorderDark
 import com.aistudio.youthverse.rvzkmq.ui.theme.CyanAccent
 import com.aistudio.youthverse.rvzkmq.ui.theme.DeepSpaceBackground
 import com.aistudio.youthverse.rvzkmq.ui.theme.ElevatedSurfaceDark
+import com.aistudio.youthverse.rvzkmq.ui.theme.TextPrimaryDark
+import com.aistudio.youthverse.rvzkmq.ui.theme.TextSecondaryDark
 import com.aistudio.youthverse.rvzkmq.ui.theme.VioletPrimary
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -106,7 +109,7 @@ fun AuthFlow(
     var currentRoute by rememberSaveable { mutableStateOf(AuthRoute.WELCOME) }
 
     LaunchedEffect(Unit) {
-        val activity = context as? Activity
+        val activity = resolveActivity(context)
         if (activity != null) {
             authViewModel.attemptAutoSignIn(activity, credentialManager)
         }
@@ -129,7 +132,7 @@ fun AuthFlow(
                 language = language,
                 onLanguageChange = authViewModel::setAuthLanguage,
                 onGoogleSignInClick = {
-                    val activity = context as? Activity
+                    val activity = resolveActivity(context)
                     authViewModel.signInWithGoogle(activity, credentialManager)
                 },
                 onEmailSignInClick = {
@@ -297,7 +300,13 @@ fun WelcomeAuthScreen(
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = VioletPrimary.copy(alpha = 0.25f),
                             selectedLabelColor = CyanAccent,
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            labelColor = TextSecondaryDark
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = language == lang,
+                            borderColor = BorderDark,
+                            selectedBorderColor = CyanAccent.copy(alpha = 0.6f)
                         ),
                         modifier = Modifier
                             .padding(start = 8.dp)
@@ -353,7 +362,7 @@ fun WelcomeAuthScreen(
                         "Digital Reading Universe for Novels & Manga in Myanmar & English"
                     },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = TextSecondaryDark,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 12.dp)
                 )
@@ -498,7 +507,7 @@ fun WelcomeAuthScreen(
                         "By continuing, you agree to YouthVerse Terms & Privacy Policy."
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                    color = TextSecondaryDark.copy(alpha = 0.85f),
                     textAlign = TextAlign.Center
                 )
             }
@@ -530,17 +539,27 @@ private fun FeatureRow(icon: ImageVector, text: String) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = TextPrimaryDark,
             fontWeight = FontWeight.Medium
         )
     }
+}
+
+private fun resolveActivity(context: Context): Activity? {
+    (context as? Activity)?.let { return it }
+    var current = context
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
 }
 
 internal suspend fun trySilentGoogleIdToken(
     context: Context,
     credentialManager: CredentialManager
 ): String? {
-    val activity = context as? Activity ?: return null
+    val activity = resolveActivity(context) ?: return null
     val clientId = AuthViewModel.resolveDefaultWebClientId(activity) ?: return null
     val googleIdOption = GetGoogleIdOption.Builder()
         .setFilterByAuthorizedAccounts(true)
@@ -574,7 +593,7 @@ internal suspend fun acquireGoogleIdToken(
     context: Context,
     credentialManager: CredentialManager
 ): GoogleCredentialOutcome {
-    val activity = context as? Activity
+    val activity = resolveActivity(context)
         ?: return GoogleCredentialOutcome.Failure("Sign-in could not start. Please reopen the app and try again.")
 
     val clientId = AuthViewModel.resolveDefaultWebClientId(activity)
@@ -604,17 +623,7 @@ internal suspend fun acquireGoogleIdToken(
         }
     } catch (e: GetCredentialCancellationException) {
         Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
-        val msg = e.message.orEmpty()
-        if (msg.contains("DEVELOPER_ERROR", ignoreCase = true) ||
-            msg.contains("reauth failed", ignoreCase = true) ||
-            msg.contains("16:") ||
-            msg.contains("28436") ||
-            msg.contains("28444")
-        ) {
-            GoogleCredentialOutcome.Failure(friendlyAuthError(e))
-        } else {
-            GoogleCredentialOutcome.Cancelled
-        }
+        GoogleCredentialOutcome.Failure(friendlyAuthError(e))
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -630,6 +639,21 @@ internal sealed class GoogleCredentialOutcome {
 }
 
 private fun friendlyAuthError(error: Exception): String {
+    if (error is GetCredentialCancellationException) {
+        val msg = error.message.orEmpty()
+        return when {
+            msg.contains("DEVELOPER_ERROR", ignoreCase = true) ||
+                msg.contains("10:", ignoreCase = true) ||
+                msg.contains("28444") ->
+                "Google Sign-In SHA-1 or Web Client ID does not match Firebase Console configuration."
+            msg.contains("reauth failed", ignoreCase = true) ||
+                msg.contains("16:") ||
+                msg.contains("28436") ->
+                "Google account verification failed. Verify SHA-1/SHA-256 registration and Google Play services."
+            else ->
+                "Google Sign-In did not complete (${msg.ifBlank { "cancelled" }}). If it closed right after picking an account, verify your APK SHA-1 fingerprint in Firebase Console (with an updated google-services.json) and check your VPN/network, or sign in with Email."
+        }
+    }
     if (error is NoCredentialException) {
         return "No Google account found on this device. Add a Google account or sign in with Email."
     }

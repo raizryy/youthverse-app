@@ -178,6 +178,54 @@ class AuthRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertNull(auth.currentUser)
     }
 
+    @Test
+    fun signInWithEmail_existingAdminProfileWithMissingProvider_succeedsAndPreservesAdminRole() = runBlocking {
+        val (_, authRepo) = newRepositories()
+        val email = "admin_${UUID.randomUUID()}@youthverse.test"
+
+        val createdUser = withContext(Dispatchers.IO) {
+            withTimeout(TEST_TIMEOUT_MS) {
+                authRepo.signUpWithEmail(email, "AdminPass123!", "AdminPass123!").getOrThrow().user
+            }
+        }
+        // Promote the Firestore profile doc to ADMIN and clear provider using an admin-claimed token
+        // (simulating a pre-existing production admin user whose doc predates the 'provider' field).
+        val adminToken = withContext(Dispatchers.IO) {
+            withTimeout(TEST_TIMEOUT_MS) {
+                createdUser.getIdToken(false).await()
+                firestore.collection("users").document(createdUser.uid).get().await()
+            }
+        }
+        assertTrue(adminToken.exists())
+
+        withContext(Dispatchers.IO) {
+            withTimeout(TEST_TIMEOUT_MS) {
+                authRepo.signOut(credentialManager = null)
+                // Sign in as pre-seeded admin user from seed-emulator-admin.mjs (has admin: true claim)
+                val seededAdmin = auth.signInWithEmailAndPassword("admin@test.com", "password123").await().user!!
+                firestore.collection("users").document(createdUser.uid).update(
+                    mapOf(
+                        "role" to "ADMIN",
+                        "provider" to ""
+                    )
+                ).await()
+                assertNotNull(seededAdmin.uid)
+                authRepo.signOut(credentialManager = null)
+            }
+        }
+
+        val loginResult = withContext(Dispatchers.IO) {
+            withTimeout(TEST_TIMEOUT_MS) {
+                authRepo.signInWithEmail(email, "AdminPass123!", preferredLanguage = "en")
+            }
+        }
+
+        assertTrue("Existing ADMIN profile sign-in should succeed: ${loginResult.exceptionOrNull()?.message}", loginResult.isSuccess)
+        val (_, profile) = loginResult.getOrThrow()
+        assertEquals("ADMIN", profile.role)
+        assertEquals("password", profile.provider)
+    }
+
     private companion object {
         const val TEST_TIMEOUT_MS = 10000L
     }

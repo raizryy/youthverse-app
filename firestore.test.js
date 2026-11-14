@@ -267,3 +267,69 @@ test("User can create their own profile with role USER and valid provider, but c
     })
   );
 });
+
+test("Existing ADMIN profile can update allowed metadata without failing isValidUserProfile, while USER cannot escalate role", async () => {
+  const adminUserUid = "legacy_admin_uid";
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("users").doc(adminUserUid).set({
+      uid: adminUserUid,
+      email: "lwin09528@gmail.com",
+      displayName: "Admin",
+      role: "ADMIN",
+      preferredLanguage: "my",
+      createdAt: new Date(),
+    });
+    await context.firestore().collection("users").doc(ALICE_UID).set({
+      uid: ALICE_UID,
+      email: "alice@example.com",
+      role: "USER",
+      preferredLanguage: "my",
+      createdAt: new Date(),
+    });
+  });
+
+  const legacyAdminDb = testEnv.authenticatedContext(adminUserUid, { email: "lwin09528@gmail.com" }).firestore();
+  await assertSucceeds(
+    legacyAdminDb.collection("users").doc(adminUserUid).update({
+      provider: "password",
+      preferredLanguage: "en",
+      updatedAt: new Date(),
+    })
+  );
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      role: "ADMIN",
+      updatedAt: new Date(),
+    })
+  );
+});
+
+test("Legacy ADMIN document missing uid and createdAt can update allowed fields without failing rules", async () => {
+  const legacyNoUid = "legacy_no_uid_admin";
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("users").doc(legacyNoUid).set({
+      email: "lwin09528@gmail.com",
+      role: "ADMIN",
+      preferredLanguage: "",
+    });
+  });
+
+  const db = testEnv.authenticatedContext(legacyNoUid, { email: "lwin09528@gmail.com" }).firestore();
+  await assertSucceeds(
+    db.collection("users").doc(legacyNoUid).update({
+      provider: "password",
+      preferredLanguage: "my",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Attempting to forge uid to someone else's UID still fails
+  await assertFails(
+    db.collection("users").doc(legacyNoUid).update({
+      uid: ALICE_UID,
+      updatedAt: new Date(),
+    })
+  );
+});

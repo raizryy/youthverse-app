@@ -1,5 +1,6 @@
 package com.aistudio.youthverse.rvzkmq.ui.auth
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,7 +63,11 @@ import com.aistudio.youthverse.rvzkmq.ui.theme.BorderDark
 import com.aistudio.youthverse.rvzkmq.ui.theme.CyanAccent
 import com.aistudio.youthverse.rvzkmq.ui.theme.DeepSpaceBackground
 import com.aistudio.youthverse.rvzkmq.ui.theme.ElevatedSurfaceDark
+import com.aistudio.youthverse.rvzkmq.ui.theme.ErrorRed
 import com.aistudio.youthverse.rvzkmq.ui.theme.SuccessGreen
+import com.aistudio.youthverse.rvzkmq.ui.theme.TextMutedDark
+import com.aistudio.youthverse.rvzkmq.ui.theme.TextPrimaryDark
+import com.aistudio.youthverse.rvzkmq.ui.theme.TextSecondaryDark
 import com.aistudio.youthverse.rvzkmq.ui.theme.VioletPrimary
 
 @Composable
@@ -154,7 +159,7 @@ fun EmailSignInScreen(
                     Icon(
                         imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                         contentDescription = if (passwordVisible) "Hide password" else "Show password",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = TextSecondaryDark
                     )
                 }
             },
@@ -240,7 +245,7 @@ fun EmailSignInScreen(
             Text(
                 text = if (isMyanmar) "အကောင့်မရှိသေးပါသလား?" else "New to YouthVerse?",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = TextSecondaryDark
             )
             TextButton(
                 onClick = {
@@ -352,7 +357,7 @@ fun EmailSignUpScreen(
                     Icon(
                         imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                         contentDescription = if (passwordVisible) "Hide password" else "Show password",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = TextSecondaryDark
                     )
                 }
             },
@@ -398,7 +403,7 @@ fun EmailSignUpScreen(
                     Icon(
                         imageVector = if (confirmPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                         contentDescription = if (confirmPasswordVisible) "Hide confirm password" else "Show confirm password",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = TextSecondaryDark
                     )
                 }
             },
@@ -464,7 +469,7 @@ fun EmailSignUpScreen(
             Text(
                 text = if (isMyanmar) "အကောင့်ရှိပြီးသားလား?" else "Already have an account?",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = TextSecondaryDark
             )
             TextButton(
                 onClick = {
@@ -549,7 +554,7 @@ fun ForgotPasswordScreen(
                             } else {
                                 "Password reset email sent to ${passwordResetState.email}. Check your inbox and spam folder."
                             },
-                            color = MaterialTheme.colorScheme.onBackground,
+                            color = TextPrimaryDark,
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
@@ -623,6 +628,8 @@ fun ForgotPasswordScreen(
         OutlinedButton(
             onClick = onBackClick,
             shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, BorderDark),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanAccent),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
@@ -709,7 +716,7 @@ private fun AuthScaffoldContainer(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = TextSecondaryDark
                 )
 
                 Spacer(modifier = Modifier.height(28.dp))
@@ -723,7 +730,7 @@ private fun AuthScaffoldContainer(
 @Composable
 internal fun AuthErrorBanner(message: String) {
     Surface(
-        color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
+        color = ErrorRed.copy(alpha = 0.16f),
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -731,7 +738,7 @@ internal fun AuthErrorBanner(message: String) {
     ) {
         Text(
             text = message,
-            color = MaterialTheme.colorScheme.error,
+            color = ErrorRed,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(12.dp),
             textAlign = TextAlign.Center
@@ -744,8 +751,17 @@ private fun authTextFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedBorderColor = VioletPrimary,
     unfocusedBorderColor = BorderDark,
     focusedLabelColor = CyanAccent,
-    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    unfocusedLabelColor = TextSecondaryDark,
     cursorColor = CyanAccent,
-    focusedTextColor = Color.White,
-    unfocusedTextColor = Color.White
+    focusedTextColor = TextPrimaryDark,
+    unfocusedTextColor = TextPrimaryDark,
+    focusedSupportingTextColor = TextSecondaryDark,
+    unfocusedSupportingTextColor = TextSecondaryDark,
+    errorBorderColor = ErrorRed,
+    errorLabelColor = ErrorRed,
+    errorSupportingTextColor = ErrorRed,
+    errorTextColor = TextPrimaryDark,
+    disabledTextColor = TextSecondaryDark,
+    disabledBorderColor = BorderDark.copy(alpha = 0.6f),
+    disabledLabelColor = TextMutedDark
 )

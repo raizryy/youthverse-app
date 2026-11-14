@@ -78,17 +78,39 @@ class UserRepository(
                 if (profile.provider.isBlank()) {
                     updates["provider"] = resolvedProvider
                 }
+                if (profile.preferredLanguage !in setOf("my", "en")) {
+                    updates["preferredLanguage"] = if (preferredLanguageOverride in setOf("my", "en")) {
+                        preferredLanguageOverride!!
+                    } else {
+                        "my"
+                    }
+                }
 
+                var appliedUpdates = false
                 if (updates.isNotEmpty()) {
                     updates["updatedAt"] = FieldValue.serverTimestamp()
-                    docRef.update(updates).await()
+                    try {
+                        docRef.update(updates).await()
+                        appliedUpdates = true
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+                    }
                 }
-                Result.success(profile.copy(
-                    displayName = (updates["displayName"] as? String) ?: profile.displayName,
-                    email = (updates["email"] as? String) ?: profile.email,
-                    photoUrl = (updates["photoUrl"] as? String) ?: profile.photoUrl,
-                    provider = (updates["provider"] as? String) ?: profile.provider
-                ))
+                Result.success(
+                    if (appliedUpdates) {
+                        profile.copy(
+                            displayName = (updates["displayName"] as? String) ?: profile.displayName,
+                            email = (updates["email"] as? String) ?: profile.email,
+                            photoUrl = (updates["photoUrl"] as? String) ?: profile.photoUrl,
+                            provider = (updates["provider"] as? String) ?: profile.provider,
+                            preferredLanguage = (updates["preferredLanguage"] as? String) ?: profile.preferredLanguage
+                        )
+                    } else {
+                        profile
+                    }
+                )
             } else {
                 val initialDisplayName = user.displayName?.trim()?.takeIf { it.isNotBlank() }
                     ?: user.email?.substringBefore("@")?.trim()?.takeIf { it.isNotBlank() }
